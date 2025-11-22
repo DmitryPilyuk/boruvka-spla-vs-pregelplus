@@ -39,3 +39,10 @@
 
 # debug information files
 *.dwo
+
+.env
+
+# Project specific
+mst/build/
+mst/compile_commands.json
+mst/.cache/
