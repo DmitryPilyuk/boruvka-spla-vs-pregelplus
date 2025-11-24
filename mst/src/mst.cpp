@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -14,11 +15,74 @@ enum Field { INTEGER,
 enum Symmetry { SYMMETRIC,
                 GENERAL };
 
-struct edge {
+struct Edge {
     uint src;
     uint dst;
     int  w;
 };
+spla::ref_ptr<spla::Matrix> load_gr(const std::string& path, uint& nnz) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        throw std::runtime_error("Failed to open " + path);
+    }
+
+    nnz                        = 0;
+    uint        nodes          = 0;
+    bool        is_size_parsed = false;
+    std::string line;
+
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == 'c') {
+            continue;
+        }
+
+        if (line[0] == 'p') {
+            std::istringstream iss(line);
+            char               p, sp[3];
+            iss >> p >> sp >> nodes >> nnz;
+            is_size_parsed = true;
+            break;
+        }
+    }
+
+    if (!is_size_parsed) {
+        throw std::runtime_error("Bad file: no size line");
+    }
+
+    spla::ref_ptr<spla::Matrix> matrix =
+            spla::Matrix::make(nodes, nodes, spla::INT);
+    matrix->set_fill_value(spla::Scalar::make_int(INT32_MAX));
+
+
+    for (uint i = 0; i < nnz; i++) {
+        if (!std::getline(f, line)) {
+            throw std::runtime_error("Bad file: not enough data lines.");
+        }
+
+        if (line.empty() || line[0] == 'c') {
+            i--;
+            continue;
+        }
+
+        if (line[0] == 'a') {
+            uint         src, dst;
+            std::int32_t weight = 1;
+
+            std::istringstream iss(line);
+            char               a;
+            iss >> a >> src >> dst >> weight;
+
+            matrix->set_int(src - 1, dst - 1, weight);
+
+
+            //matrix->set_int(dst - 1, src - 1, weight);
+        }
+    }
+
+    //nnz *= 2;
+
+    return matrix;
+}
 
 spla::ref_ptr<spla::Matrix> load_mtx(const std::string& path, uint& nnz) {
 
@@ -197,21 +261,22 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
         return spla::Status::InvalidArgument;
     }
 
-    auto desc = spla::Descriptor::make();
-    auto inf  = spla::Scalar::make_int(INT32_MAX);
-    auto S    = spla::Matrix::make(n, n, spla::INT);
+    bool S_empty = false;
+    auto desc    = spla::Descriptor::make();
+    auto inf     = spla::Scalar::make_int(INT32_MAX);
+    auto S       = spla::Matrix::make(n, n, spla::INT);
     spla::exec_m_eadd(S, A, A, spla::FIRST_INT, desc);
     auto S_new    = spla::Matrix::make(n, n, spla::INT);
     auto edge_w   = spla::Vector::make(n, spla::INT);
     auto edge_dst = spla::Vector::make(n, spla::UINT);
-    // auto              parent   = spla::Vector::make(n, spla::UINT);
+
+    std::vector<Edge> cedge(n, {0, 0, INT32_MAX});
     std::vector<uint> parent_(n);
     for (uint i = 0; i < n; i++) {
         parent_[i] = i;
     }
 
-
-    while (nnz > 0) {
+    while (!S_empty) {
 
         spla::exec_m_reduce_by_row(edge_w, S, spla::MIN_INT, inf);
 
@@ -221,6 +286,8 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
         uint* cols   = (uint*) cols_view->get_buffer();
         int*  values = (int*) values_view->get_buffer();
 
+        nnz = values_view->get_size() / sizeof(uint);
+
         for (uint i = 0; i < nnz; i++) {
             int w;
             edge_w->get_int(rows[i], w);
@@ -229,7 +296,7 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
             }
         }
 
-        std::vector<edge> cedge(n, {0, 0, INT32_MAX});
+        std::fill(cedge.begin(), cedge.end(), Edge(0, 0, INT32_MAX));
 
         for (uint i = 0; i < n; i++) {
             uint comp = parent_[i];
@@ -246,8 +313,9 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
 
         for (uint i = 0; i < n; i++) {
             auto edge = cedge[i];
-            if (edge.w != INT32_MAX) {
+            if (edge.w != INT32_MAX && parent_[edge.dst] != i) {
                 spanning_tree->set_int(edge.src, edge.dst, edge.w);
+                spanning_tree->set_int(edge.dst, edge.src, edge.w);
                 parent_[i] = edge.dst;
             }
         }
@@ -267,19 +335,36 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
             }
         }
 
-        uint new_nnz = 0;
+
         S_new->set_fill_value(inf);
 
+        S_empty = true;
         for (uint i = 0; i < nnz; i++) {
             if (parent_[rows[i]] != parent_[cols[i]]) {
                 S_new->set_int(rows[i], cols[i], values[i]);
-                new_nnz++;
+                S_empty = false;
             }
         }
         std::swap(S, S_new);
         S_new->clear();
-        nnz = new_nnz;
     }
 
     return spla::Status::Ok;
+}
+
+unsigned long calculate_tree_weight(const spla::ref_ptr<spla::Matrix>& tree) {
+    spla::ref_ptr<spla::MemView> rows_view, cols_view, values_view;
+    tree->read(rows_view, cols_view, values_view);
+
+    unsigned long total_weight = 0;
+    int*          values       = (int*) values_view->get_buffer();
+    uint          nnz          = values_view->get_size() / sizeof(int);
+
+    for (uint i = 0; i < nnz; ++i) {
+        total_weight += values[i];
+    }
+
+    // Since each edge is added twice (src,dst) and (dst,src),
+    // we need to divide the total weight by 2.
+    return total_weight / 2;
 }
