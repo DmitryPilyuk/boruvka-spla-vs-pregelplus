@@ -43,6 +43,8 @@
 .env
 
 # Project specific
-mst/build/
-mst/compile_commands.json
-mst/.cache/
+*/build/
+*/compile_commands.json
+*/.cache/
+
+data/

@@ -1,3 +1,5 @@
+#include "spla/op.hpp"
+#include "spla/scalar.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -9,26 +11,23 @@
 #include <sys/types.h>
 #include <vector>
 
-enum Field { INTEGER,
-             PATTERN };
-
-enum Symmetry { SYMMETRIC,
-                GENERAL };
 
 struct Edge {
     uint src;
     uint dst;
-    int  w;
+    uint w;
 };
-spla::ref_ptr<spla::Matrix> load_gr(const std::string& path, uint& nnz) {
+
+spla::ref_ptr<spla::Matrix> load_gr(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) {
         throw std::runtime_error("Failed to open " + path);
     }
 
-    nnz                        = 0;
-    uint        nodes          = 0;
-    bool        is_size_parsed = false;
+    uint nnz            = 0;
+    uint nodes          = 0;
+    bool is_size_parsed = false;
+
     std::string line;
 
     while (std::getline(f, line)) {
@@ -50,8 +49,8 @@ spla::ref_ptr<spla::Matrix> load_gr(const std::string& path, uint& nnz) {
     }
 
     spla::ref_ptr<spla::Matrix> matrix =
-            spla::Matrix::make(nodes, nodes, spla::INT);
-    matrix->set_fill_value(spla::Scalar::make_int(INT32_MAX));
+            spla::Matrix::make(nodes, nodes, spla::UINT);
+    matrix->set_fill_value(spla::Scalar::make_uint(UINT32_MAX));
 
 
     for (uint i = 0; i < nnz; i++) {
@@ -65,133 +64,20 @@ spla::ref_ptr<spla::Matrix> load_gr(const std::string& path, uint& nnz) {
         }
 
         if (line[0] == 'a') {
-            uint         src, dst;
-            std::int32_t weight = 1;
+            uint src, dst;
+            uint weight = 1;
 
             std::istringstream iss(line);
             char               a;
             iss >> a >> src >> dst >> weight;
 
-            matrix->set_int(src - 1, dst - 1, weight);
-
-
-            //matrix->set_int(dst - 1, src - 1, weight);
+            matrix->set_uint(src - 1, dst - 1, weight);
         }
     }
-
-    //nnz *= 2;
 
     return matrix;
 }
 
-spla::ref_ptr<spla::Matrix> load_mtx(const std::string& path, uint& nnz) {
-
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        throw std::runtime_error("Failed to open " + path);
-    }
-
-    Field    field    = PATTERN;
-    Symmetry symmetry = GENERAL;
-    nnz               = 0;
-    uint        ncols = 0, nrows = 0;
-    bool        is_header_parsed = false;
-    bool        is_size_parsed   = false;
-    std::string line;
-
-    while (std::getline(f, line)) {
-        if (line.empty() || line[0] == '%') {
-            if (!is_header_parsed && line.starts_with("%%MatrixMarket")) {
-                std::istringstream iss(line);
-                std::string        word;
-
-                iss >> word;// %%MatrixMarket skip
-                iss >> word;// matrix skip
-
-                iss >> word;// format
-                if (!(word == "coordinate")) {
-                    throw std::runtime_error("Only support coordinate type");
-                }
-
-                iss >> word;// field
-                if (word == "pattern") {
-                    field = PATTERN;
-                } else if (word == "integer") {
-                    field = INTEGER;
-                } else {
-                    throw std::runtime_error("Unsupported field type: " + word);
-                }
-
-                iss >> word;// symmetry
-                if (word == "symmetric") {
-                    symmetry = SYMMETRIC;
-                } else if (word == "general") {
-                    symmetry = GENERAL;
-                } else {
-                    throw std::runtime_error("Unsupported symmetry type: " + word);
-                }
-                is_header_parsed = true;
-            }
-            continue;
-        }
-
-        if (!is_size_parsed) {
-            std::istringstream iss(line);
-            iss >> nrows >> ncols >> nnz;
-            is_size_parsed = true;
-            break;
-        }
-    }
-
-    if (!is_header_parsed) {
-        throw std::runtime_error("Bad file: no %%MatrixMarket header");
-    }
-
-    if (!is_size_parsed) {
-        throw std::runtime_error("Bad file: no size line");
-    }
-
-    if (ncols != nrows) {
-        throw std::runtime_error("Wrong matrixx size.");
-    }
-
-    spla::ref_ptr<spla::Matrix> matrix =
-            spla::Matrix::make(nrows, ncols, spla::INT);
-    matrix->set_fill_value(spla::Scalar::make_int(INT32_MAX));
-
-    for (uint i = 0; i < nnz; i++) {
-        if (!std::getline(f, line)) {
-            throw std::runtime_error("Bad file: not enough data lines.");
-        }
-
-        if (line.empty() || line[0] == '%') {
-            i--;
-            continue;
-        }
-
-        uint         src, dst;
-        std::int32_t weight = 1;
-
-        std::istringstream iss(line);
-
-        iss >> src >> dst;
-
-        if (field == INTEGER) {
-            iss >> weight;
-        }
-
-        matrix->set_int(src - 1, dst - 1, weight);
-        if (symmetry == SYMMETRIC) {
-            matrix->set_int(dst - 1, src - 1, weight);
-        }
-    }
-
-    if (symmetry == SYMMETRIC) {
-        nnz *= 2;
-    }
-
-    return matrix;
-}
 
 void print_matrix(const spla::ref_ptr<spla::Matrix>& matrix,
                   const std::string&                 title) {
@@ -253,7 +139,7 @@ void print_vector(const spla::ref_ptr<spla::Vector>& vector, const std::string& 
     std::cout << std::endl;
 }
 
-spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr<spla::Matrix>& A, uint nnz) {
+spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr<spla::Matrix>& A) {
 
     uint n = A->get_n_rows();
     if (n != A->get_n_cols() || spanning_tree->get_n_cols() != n ||
@@ -263,48 +149,53 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
 
     bool S_empty = false;
     auto desc    = spla::Descriptor::make();
-    auto inf     = spla::Scalar::make_int(INT32_MAX);
-    auto S       = spla::Matrix::make(n, n, spla::INT);
-    spla::exec_m_eadd(S, A, A, spla::FIRST_INT, desc);
-    auto S_new    = spla::Matrix::make(n, n, spla::INT);
-    auto edge_w   = spla::Vector::make(n, spla::INT);
-    auto edge_dst = spla::Vector::make(n, spla::UINT);
+    auto inf     = spla::Scalar::make_uint(UINT32_MAX);
+    auto S       = spla::Matrix::make(n, n, spla::UINT);
 
-    std::vector<Edge> cedge(n, {0, 0, INT32_MAX});
+    auto S_new = spla::Matrix::make(n, n, spla::UINT);
+    ;
+    auto edge_w = spla::Vector::make(n, spla::UINT);
+    S->set_fill_value(inf);
+    spla::exec_m_eadd(S, A, A, spla::FIRST_UINT, desc);
+    S_new->set_fill_value(inf);
+
+    std::vector<Edge> cedge(n, {UINT32_MAX, UINT32_MAX, UINT32_MAX});
     std::vector<uint> parent_(n);
+    std::vector<uint> edge_dst(n);
     for (uint i = 0; i < n; i++) {
         parent_[i] = i;
     }
 
     while (!S_empty) {
+        S_new->clear();
 
-        spla::exec_m_reduce_by_row(edge_w, S, spla::MIN_INT, inf);
+        spla::exec_m_reduce_by_row(edge_w, S, spla::MIN_UINT, inf);
 
         spla::ref_ptr<spla::MemView> rows_view, cols_view, values_view;
         S->read(rows_view, cols_view, values_view);
         uint* rows   = (uint*) rows_view->get_buffer();
         uint* cols   = (uint*) cols_view->get_buffer();
-        int*  values = (int*) values_view->get_buffer();
+        uint* values = (uint*) values_view->get_buffer();
 
-        nnz = values_view->get_size() / sizeof(uint);
-
+        uint nnz = values_view->get_size() / sizeof(uint);
+        std::fill(edge_dst.begin(), edge_dst.end(), UINT32_MAX);
         for (uint i = 0; i < nnz; i++) {
-            int w;
-            edge_w->get_int(rows[i], w);
-            if (w == values[i]) {
-                edge_dst->set_uint(rows[i], cols[i]);
+            uint w;
+
+            edge_w->get_uint(rows[i], w);
+            if (w == values[i] && edge_dst[rows[i]] == UINT32_MAX) {
+                edge_dst[rows[i]] = cols[i];
             }
         }
 
-        std::fill(cedge.begin(), cedge.end(), Edge(0, 0, INT32_MAX));
+        std::fill(cedge.begin(), cedge.end(), Edge(UINT32_MAX, UINT32_MAX, UINT32_MAX));
 
         for (uint i = 0; i < n; i++) {
             uint comp = parent_[i];
-            int  w;
-            edge_w->get_int(i, w);
+            uint w;
+            edge_w->get_uint(i, w);
             if (w < cedge[comp].w) {
-                uint dst;
-                edge_dst->get_uint(i, dst);
+                uint dst        = edge_dst[i];
                 cedge[comp].src = i;
                 cedge[comp].dst = dst;
                 cedge[comp].w   = w;
@@ -313,10 +204,10 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
 
         for (uint i = 0; i < n; i++) {
             auto edge = cedge[i];
-            if (edge.w != INT32_MAX && parent_[edge.dst] != i) {
-                spanning_tree->set_int(edge.src, edge.dst, edge.w);
-                spanning_tree->set_int(edge.dst, edge.src, edge.w);
-                parent_[i] = edge.dst;
+            if (edge.w != UINT32_MAX && parent_[edge.dst] != i) {
+                spanning_tree->set_uint(edge.src, edge.dst, edge.w);
+                spanning_tree->set_uint(edge.dst, edge.src, edge.w);
+                parent_[i] = parent_[edge.dst];
             }
         }
 
@@ -335,9 +226,6 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
             }
         }
 
-
-        S_new->set_fill_value(inf);
-
         S_empty = true;
         for (uint i = 0; i < nnz; i++) {
             if (parent_[rows[i]] != parent_[cols[i]]) {
@@ -346,7 +234,6 @@ spla::Status mst(spla::ref_ptr<spla::Matrix>& spanning_tree, const spla::ref_ptr
             }
         }
         std::swap(S, S_new);
-        S_new->clear();
     }
 
     return spla::Status::Ok;
